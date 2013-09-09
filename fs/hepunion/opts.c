@@ -166,13 +166,18 @@ static int hepunion_create(struct inode *dir, struct dentry *dentry, umode_t mod
 static int hepunion_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *kstbuf) {
 	int err;
 	struct hepunion_sb_info *context = get_context_d(dentry);
+#if 0
 	char *path = context->global1;
-
+#else
+	err = 1;
+	struct inode *inode;
+	inode = dentry->d_inode;
+#endif
 	pr_info("hepunion_getattr: %p, %p, %p\n", mnt, dentry, kstbuf);
 
 	will_use_buffers(context);
 	validate_dentry(dentry);
-
+#if 0
 	/* Get path */
 	err = get_relative_path(NULL, dentry, context, path, 1);
 	if (err < 0) {
@@ -186,7 +191,9 @@ static int hepunion_getattr(struct vfsmount *mnt, struct dentry *dentry, struct 
 		/* Set our inode number */
 		kstbuf->ino = dentry->d_inode->i_ino;
 	}
-
+#else
+	generic_fillattr(inode, kstbuf);
+#endif
 	release_buffers(context);
 	return err;
 }
@@ -741,11 +748,14 @@ static int hepunion_permission(struct inode *inode, int mask, struct nameidata *
 #else
 static int hepunion_permission(struct inode *inode, int mask) {
 #endif
+#if 0
 	int err;
 	struct hepunion_sb_info *context = get_context_i(inode);
 	char *path = context->global1;
 	char *real_path = context->global2;
-
+#else
+	struct hepunion_sb_info *context =get_context_i(inode);
+#endif
 #if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,18)
 	pr_info("hepunion_permission: %p, %#X, %p\n", inode, mask, nd);
 #else
@@ -754,7 +764,7 @@ static int hepunion_permission(struct inode *inode, int mask) {
 
 	will_use_buffers(context);
 	validate_inode(inode);
-
+#if 0
 #if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,18)
 	if (nd && nd->dentry) {
 		validate_dentry(nd->dentry);
@@ -783,6 +793,10 @@ static int hepunion_permission(struct inode *inode, int mask) {
 
 	release_buffers(context);
 	return err;
+#else
+	release_buffers(context);
+	return generic_permission(inode, mask);
+#endif
 }
 
 static ssize_t hepunion_read(struct file *file, char __user *buf, size_t count, loff_t *offset) {
