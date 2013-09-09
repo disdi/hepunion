@@ -748,13 +748,12 @@ static int hepunion_permission(struct inode *inode, int mask, struct nameidata *
 #else
 static int hepunion_permission(struct inode *inode, int mask) {
 #endif
-#if 0
+
 	int err;
 	struct hepunion_sb_info *context = get_context_i(inode);
+#if 0
 	char *path = context->global1;
 	char *real_path = context->global2;
-#else
-	struct hepunion_sb_info *context =get_context_i(inode);
 #endif
 #if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,18)
 	pr_info("hepunion_permission: %p, %#X, %p\n", inode, mask, nd);
@@ -765,7 +764,7 @@ static int hepunion_permission(struct inode *inode, int mask) {
 	will_use_buffers(context);
 	validate_inode(inode);
 #if 0
-#if LINUX_VERSION_CODE == KERNEL_VERSION(2,6,18)
+#if 0// LINUX_VERSION_CODE == KERNEL_VERSION(2,6,18)
 	if (nd && nd->dentry) {
 		validate_dentry(nd->dentry);
 	}
