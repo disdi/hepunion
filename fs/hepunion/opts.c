@@ -1663,7 +1663,9 @@ static ssize_t hepunion_writev(struct file *file, const struct iovec *vector, un
 #endif
 
 struct inode_operations hepunion_iops = {
+#if 0
 	.getattr	= hepunion_getattr,
+#endif
 	.permission	= hepunion_permission,
 #if 0
 	.readlink	= generic_readlink, /* dentry will already point on the right file */
@@ -1673,7 +1675,9 @@ struct inode_operations hepunion_iops = {
 
 struct inode_operations hepunion_dir_iops = {
 	.create		= hepunion_create,
+#if 0
 	.getattr	= hepunion_getattr,
+#endif
 	.link		= hepunion_link,
 	.lookup		= hepunion_lookup,
 	.mkdir		= hepunion_mkdir,
