@@ -1,8 +1,8 @@
 /**
  * \file hepunion.h
  * \brief Global header file included in all HEPunion files
- * \author Pierre Schweitzer <pierre.jean.schweitzer@cern.ch>
- * \version 1.0
+ * \author Saket Sinha <saket.sinha89@gmail.com>
+ * \version 2.0
  * \date 21-Nov-2011
  * \copyright GNU General Public License - GPL
  * \todo Implementing caching
@@ -232,6 +232,22 @@ typedef enum _specials {
 	ME = 0,
 	WH = 1
 } specials;
+
+struct hepunion_inode_info{
+	struct inode *ro_inode;
+	struct inode *rw_inode;
+	struct inode vfs_inode;
+};
+
+struct hepunion_inode_info *HEP_I(struct inode *inode)
+{
+ return container_of(inode, struct hepunion_inode_info, vfs_inode);
+}
+
+struct inode *set_to_ro(struct inode *i)
+{
+	return HEP_I(i)->ro_inode;
+}
 
 extern struct inode_operations hepunion_iops;
 extern struct inode_operations hepunion_dir_iops;

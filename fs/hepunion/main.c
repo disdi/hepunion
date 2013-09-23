@@ -11,6 +11,15 @@
  * It fills in mount context in case of success.
  */
 
+#include <linux/ioctl.h>
+#include <linux/kernel.h>
+#include <linux/limits.h>
+#include <linux/types.h>
+#include <linux/fs_stack.h>
+
+#define HEPUNION_VERSION "1.0"
+#define HEPUNION_NAME "HEPunion"
+#define HEPUNION_MAGIC 0x9F510
 #include "hepunion.h"
 
 MODULE_AUTHOR("Pierre Schweitzer, CERN CH"
@@ -49,15 +58,48 @@ static int make_path(const char *s, size_t n, char **path) {
     return -ENOMEM;
 }
 
+static int hepunion_inode_test(struct inode *inode, void *candidate_rw_inode)
+{
+ return 1;
+}
+ 
+static int hepunion_inode_set(struct inode *inode, void *lower_inode)
+{
+ return 1;
+}
+
+static struct inode *get_inode(struct super_block *sb, struct inode *rw_inode, struct inode *ro_inode)
+{
+ struct inode *inode;
+ struct hepunion_inode_info *info = sb->s_fs_info;
+ info = HEP_I(ro_inode);
+
+ inode = iget5_locked(sb, ro_inode->i_ino,  hepunion_inode_test,  hepunion_inode_set, ro_inode);
+ inode->i_ino = ro_inode->i_ino;
+ inode = set_to_ro(ro_inode);
+ inode->i_version++;
+ //inode->i_op=&hepunion_iops;//not defined yet
+ //inode->i_fop=&hepunion_fops;//not defined yet
+ fsstack_copy_attr_all(inode, ro_inode);  
+ fsstack_copy_inode_size(inode, ro_inode);
+
+ info = HEP_I(rw_inode); 
+ 
+ unlock_new_inode(inode);
+ return inode;
+}
+
 static int get_branches(struct super_block *sb, const char *arg) {
 	int err, forced_ro = 0;
 	char *output, *type, *part2;
-	struct hepunion_sb_info * sb_info = sb->s_fs_info;
-	struct inode * root_i;
 	umode_t root_m;
 	struct timespec atime, mtime, ctime;
 	struct file *filp;
-
+	struct path ro_path;
+	char *read_write_branch, *read_only_branch;
+	size_t rw_len=0, ro_len=0;	
+	struct inode * root_i;
+	struct inode * ro_inode, * rw_inode;
 	pr_info("get_branches: %p, %s\n", sb, arg);
 
 	/* We are expecting 2 branches, separated by : */
@@ -78,16 +120,16 @@ static int get_branches(struct super_block *sb, const char *arg) {
 		}
 
 		if (!strncmp(type + 1, "RW", 2)) {
-			sb_info->read_write_branch = output;
-			sb_info->rw_len = err;
+			read_write_branch = output;
+			rw_len = err;
 		}
 		else if (strncmp(type + 1, "RO", 2)) {
 		pr_err("Unrecognized branch type: %.2s\n", type + 1);
 			return -EINVAL;
 		}
 		else {
-			sb_info->read_only_branch = output;
-			sb_info->ro_len = err;
+			read_only_branch = output;
+			ro_len = err;
 			forced_ro = 1;
 		}
 
@@ -97,11 +139,11 @@ static int get_branches(struct super_block *sb, const char *arg) {
 	/* It has no type => RO */
 	else {
 		/* Get branch name */
-		err = make_path(arg, part2 - arg, &sb_info->read_only_branch);
-		if (err < 0 || !sb_info->read_only_branch) {
+		err = make_path(arg, part2 - arg, &read_only_branch);
+		if (err < 0 || !read_only_branch) {
 			return err;
 		}
-		sb_info->ro_len = err;
+		ro_len = err;
 	}
 
 	/* Skip : */
@@ -116,12 +158,12 @@ static int get_branches(struct super_block *sb, const char *arg) {
 		}
 
 		if (!strncmp(type + 1, "RW", 2)) {
-			if (sb_info->read_write_branch) {
+			if (read_write_branch) {
 				pr_err("Attempted to provide two RW branches\n");
 				return -EINVAL;
 			}
-			sb_info->read_write_branch = output;
-			sb_info->rw_len = err;
+			read_write_branch = output;
+			rw_len = err;
 		}
 		else if (strncmp(type + 1, "RO", 2)) {
 			pr_err("Unrecognized branch type: %.2s\n", type + 1);
@@ -132,39 +174,41 @@ static int get_branches(struct super_block *sb, const char *arg) {
 				pr_err("No RW branch provided\n");
 				return -EINVAL;
 			}
-			sb_info->read_only_branch = output;
-			sb_info->ro_len = err;
+			read_only_branch = output;
+			ro_len = err;
 		}
 	}
 	else {
 		/* It has no type, adapt given the situation */
-		if (sb_info->read_write_branch) {
-			err = make_path(part2, strlen(part2), &sb_info->read_only_branch);
-			if (err < 0 || !sb_info->read_only_branch) {
+		if (read_write_branch) {
+			err = make_path(part2, strlen(part2), &read_only_branch);
+			if (err < 0 || !read_only_branch) {
 				return err;
 			}
-			sb_info->ro_len = err;
+			ro_len = err;
 		}
-		else if (sb_info->read_only_branch) {
-			err = make_path(part2, strlen(part2), &sb_info->read_write_branch);
-			if (err < 0 || !sb_info->read_write_branch) {
+		else if (read_only_branch) {
+			err = make_path(part2, strlen(part2), &read_write_branch);
+			if (err < 0 || !read_write_branch) {
 				return err;
 			}
-			sb_info->rw_len = err;
+			rw_len = err;
 		}
 	}
 
 	/* At this point, we should have the two branches set */
-	if (!sb_info->read_only_branch || !sb_info->read_write_branch) {
-		pr_err("One branch missing. Read-write: %s\nRead-only: %s\n", sb_info->read_write_branch, sb_info->read_only_branch);
+	if (!read_only_branch || !read_write_branch) {
+		pr_err("One branch missing. Read-write: %s\nRead-only: %s\n", read_write_branch, read_only_branch);
 		return -EINVAL;
 	}
 
-	pr_info("Read-write: %s\nRead-only: %s\n", sb_info->read_write_branch, sb_info->read_only_branch);
-	pr_info("Read-write length: %zu\nRead-only length: %zu\n", sb_info->rw_len, sb_info->ro_len);
+	pr_info("Read-write: %s\nRead-only: %s\n", read_write_branch, read_only_branch);
+	pr_info("Read-write length: %zu\nRead-only length: %zu\n", rw_len, ro_len);
 
+	kern_path(read_only_branch, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &ro_path);
+	ro_inode = ro_path.dentry->d_inode;
 	/* Check for branches */
-	filp = filp_open(sb_info->read_only_branch, O_RDONLY, 0);
+	filp = filp_open(read_only_branch, O_RDONLY, 0);
 	if (IS_ERR(filp)) {
 		pr_err("Failed opening RO branch!\n");
 		return PTR_ERR(filp);
@@ -189,29 +233,24 @@ static int get_branches(struct super_block *sb, const char *arg) {
 	}
 #endif
 
-	filp = filp_open(sb_info->read_write_branch, O_RDONLY, 0);
+	filp = filp_open(read_write_branch, O_RDONLY, 0);
 	if (IS_ERR(filp)) {
 		pr_err("Failed opening RW branch!\n");
 		return PTR_ERR(filp);
 	}
+	rw_inode = filp->f_dentry->d_inode;
 	filp_close(filp, NULL);
 
 	/* Allocate inode for / */
-	root_i = new_inode(sb);
+	root_i = get_inode(sb, ro_inode, rw_inode);
 	if (IS_ERR(root_i)) {
 		pr_crit("Failed allocating new inode for /!\n");
 		return PTR_ERR(root_i);
 	}
-
-	/* Init it */
-	root_i->i_ino = name_to_ino("/");
 	root_i->i_mode = root_m;
 	root_i->i_atime = atime;
 	root_i->i_mtime = mtime;
 	root_i->i_ctime = ctime;
-	root_i->i_op = &hepunion_dir_iops;
-	root_i->i_fop = &hepunion_dir_fops;
-	set_nlink(root_i, 2);
 #ifdef _DEBUG_
 	root_i->i_private = (void *)HEPUNION_MAGIC;
 #endif
@@ -228,14 +267,14 @@ static int get_branches(struct super_block *sb, const char *arg) {
 		iput(root_i);
 		return PTR_ERR(sb->s_root);
 	}
-	sb->s_root->d_op = &hepunion_dops;
+	//sb->s_root->d_op = &hepunion_dops;notdefined yet
 #ifdef _DEBUG_
 	sb->s_root->d_fsdata = (void *)HEPUNION_MAGIC;
 #endif
 
 	/* Set super block attributes */
 	sb->s_magic = HEPUNION_MAGIC;
-	sb->s_op = &hepunion_sops;
+	//sb->s_op = &hepunion_sops; //not defined yet
 	sb->s_time_gran = 1;
 
 	/* TODO: Add directory entries */
@@ -265,7 +304,7 @@ static int hepunion_read_super(struct super_block *sb, void *raw_data,
 	}
 
 	/* Init sb_info */
-	recursive_mutex_init(&sb_info->id_lock);
+	//recursive_mutex_init(&sb_info->id_lock);//not defined yet
 	INIT_LIST_HEAD(&sb_info->read_inode_head);
 #ifdef _DEBUG_
 	sb_info->buffers_in_use = 0;
